@@ -84,6 +84,13 @@ svg.pat.two{max-width:280px}
 .grip{color:var(--mut);font-size:19px;line-height:1;padding:4px 6px 4px 0;cursor:grab;touch-action:none;user-select:none}
 .xbtn{width:34px;height:34px;border-radius:9px;color:var(--mut);font-size:14px;border:1px solid var(--line);flex:0 0 auto}
 .card.dragging{opacity:.9;box-shadow:0 10px 26px rgba(0,0,0,.5);border-color:var(--acc);position:relative;z-index:5}
+.steps{margin:0 0 10px;padding-left:20px;font-size:13px;line-height:1.7}
+.steps li{margin-bottom:2px}
+#gscode{height:150px}
+.sheetbg{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:60;display:flex;align-items:flex-end}
+.sheet{width:100%;max-height:82vh;overflow-y:auto;background:var(--panel);border-top:1px solid var(--line);
+  border-radius:18px 18px 0 0;padding:16px 14px calc(18px + env(safe-area-inset-bottom))}
+.sheet .exlist{gap:8px}
 .addcard{display:block;width:100%;min-height:200px;border-radius:var(--r);border:1px dashed var(--line);color:var(--mut);margin-bottom:12px;font-size:14px}
 .done1{display:flex;align-items:center;gap:8px;padding:10px 12px}
 .done1 .nmb{display:flex;align-items:center;gap:10px;flex:1;text-align:left;min-width:0}
@@ -144,6 +151,7 @@ table.cov td.z{color:#FF9AA4}
 #rest .t button{margin-left:auto;font-size:13px;color:var(--mut)}
 #rest .pg{height:3px;border-radius:2px;background:var(--line);margin-top:6px;overflow:hidden}
 #rest .pg i{display:block;height:100%;background:var(--acc)}
+#errbar{position:fixed;left:8px;right:8px;top:8px;z-index:99;background:#5a1620;color:#ffd9de;border:1px solid #c8102e;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.4}
 nav{position:fixed;left:0;right:0;bottom:0;height:calc(var(--nav) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);display:flex;background:var(--panel);border-top:1px solid var(--line)}
 nav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:11px;color:var(--mut)}
 nav button .i{width:20px;height:20px}
@@ -358,6 +366,45 @@ const INFO={
 /* ===== 固定値：設定項目を持たない ===== */
 const KEY='barload.v5';
 const PLACES={gym:'ジム',home:'家'};
+const GS=[
+"const SECRET = 'ここを自分で決めた文字列に変更';",
+"const CALENDAR_ID = '';  // 既定のカレンダーでよければ空のまま",
+"",
+"function doPost(e) {",
+"  try {",
+"    const p = JSON.parse(e.postData.contents);",
+"    if (p.token !== SECRET) return out({ ok: false, error: 'token' });",
+"    const cal = CALENDAR_ID ? CalendarApp.getCalendarById(CALENDAR_ID)",
+"                            : CalendarApp.getDefaultCalendar();",
+"    let created = 0, updated = 0;",
+"    (p.events || []).forEach(function (ev) {",
+"      const s = new Date(ev.start), en = new Date(ev.end);",
+"      const d0 = new Date(s.getFullYear(), s.getMonth(), s.getDate());",
+"      const d1 = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1);",
+"      const tag = '#gymlog:' + ev.key.replace(/-/g, '');",
+"      const hit = cal.getEvents(d0, d1).filter(function (x) {",
+"        return (x.getDescription() || '').indexOf(tag) >= 0;",
+"      })[0];",
+"      if (hit) { hit.setTitle(ev.title); hit.setDescription(ev.desc); hit.setTime(s, en); updated++; }",
+"      else { cal.createEvent(ev.title, s, en, { description: ev.desc }); created++; }",
+"    });",
+"    return out({ ok: true, created: created, updated: updated });",
+"  } catch (err) { return out({ ok: false, error: String(err) }); }",
+"}",
+"function doGet() { return out({ ok: true, msg: 'barload sync endpoint' }); }",
+"function out(o) {",
+"  return ContentService.createTextOutput(JSON.stringify(o))",
+"    .setMimeType(ContentService.MimeType.JSON);",
+"}"
+].join('\n');
+function copyGs(){
+  const t=document.getElementById('gscode'); if(!t) return;
+  t.removeAttribute('readonly'); t.select(); t.setSelectionRange(0,99999);
+  try{ if(navigator.clipboard) navigator.clipboard.writeText(t.value); else document.execCommand('copy'); }
+  catch(e){ try{ document.execCommand('copy'); }catch(x){} }
+  t.setAttribute('readonly','');
+  alert('コピーしました。script.google.com に貼り付けてください。');
+}
 const TYPES={bar:'バーベル',db:'ダンベル（両手）',db1:'ダンベル（1つ）',stack:'マシン',body:'自重'};
 const SUB=new Set(['シュラッグ','アップライトロウ','キックバック','コンセントレーションカール','リストカール',
  'リバースカール','ダンベルリストカール','プルオーバー','シシースクワット','ステップアップ','ヒップアブダクション',
@@ -507,8 +554,10 @@ function renderToday(){
   h+=`<div class="tabs" id="tabs">${df.list.map((r,i)=>{
       const e=df.e[r.id], done=e&&e.reps.every(x=>x!=null);
       return `<button class="${i===CUR?'on':''}${done?' ok':''}" onclick="jump(${i})">${done?'✓ ':''}${r.part}</button>`;
-    }).join('')}<button class="${CUR===df.list.length?'on':''}" onclick="jump(${df.list.length})">＋</button></div>`;
-  h+=`<div class="track" id="track">${df.list.map(r=>card(r)).join('')}${addBox(pl)}</div>`;
+    }).join('')}<button onclick="openAdd()">＋</button></div>`;
+  h+=`<div class="track" id="track">${df.list.map(r=>card(r)).join('')}
+    <button class="addcard" onclick="openAdd()">＋ 種目を追加</button></div>`;
+  h+=sheet(pl);
   if(df.list.length) h+=`<button class="wide pri" onclick="finish()">この日の記録を保存</button>
       <button class="wide" onclick="discard()">入力を取り消す</button>`;
   el.innerHTML=h;
@@ -535,35 +584,38 @@ function mark(){
   [...t.children].forEach((b,i)=>b.classList.toggle('on',i===CUR));
   const c=t.children[CUR]; if(c&&c.scrollIntoView) try{ c.scrollIntoView({inline:'nearest',block:'nearest'}); }catch(x){}
 }
-function move(id,dir){
-  const L=S.draft.list, i=L.findIndex(x=>x.id===id), j=i+dir;
-  if(i<0||j<0||j>=L.length) return;
-  [L[i],L[j]]=[L[j],L[i]]; save(); CUR=j; renderToday();
-}
-function addBox(pl){
-  if(!ADD) return `<button class="addcard" onclick="ADD={part:null};renderToday()">＋ 種目を追加</button>`;
-  if(!ADD.part) return `<div class="card"><div class="row"><h2 style="font-size:15px">部位を選ぶ</h2>
-      <button class="xbtn" style="margin-left:auto" onclick="ADD=null;renderToday()">✕</button></div>
-      <div class="exlist" style="margin-top:8px">${PARTS.map(p=>{const ld=lastOf(p,pl),
-        n=S.draft.list.filter(r=>r.part===p).length;
-        return `<button onclick="ADD={part:'${p}'};renderToday()">${p}${n?'（今日'+n+'種目）':''}
-          <small>${ld==='0000'?'未実施':'前回 '+ld.slice(5).replace('-','/')}</small></button>`;}).join('')}</div></div>`;
-  const used=S.draft.list.map(r=>r.ex);
-  return `<div class="card"><div class="row"><h2 style="font-size:15px">${ADD.part}の種目</h2>
-    <button class="xbtn" style="margin-left:auto" onclick="ADD={part:null};renderToday()">✕</button></div>
-    <div class="exlist" style="margin-top:8px">${libFor(pl,ADD.part).map(x=>{
-      const dup=used.includes(x[1]);
-      return `<button ${dup?'disabled style="opacity:.4"':`onclick="addEx('${ADD.part}','${x[1]}')"`}>${x[1]}
-        <small>${TYPES[x[2]]}${dup?' ／ 追加済み':''}</small></button>`;}).join('')}</div></div>`;
+function openAdd(){ ADD={part:null}; renderToday(); }
+function closeAdd(){ ADD=null; renderToday(); }
+function sheet(pl){
+  if(!ADD) return '';
+  const back=ADD.part?`<button class="xbtn" onclick="ADD={part:null};renderToday()">‹</button>`:'';
+  let body;
+  if(!ADD.part){
+    body=PARTS.map(p=>{ const ld=lastOf(p,pl), n=S.draft.list.filter(r=>r.part===p).length;
+      return `<button onclick="ADD={part:'${p}'};renderToday()">${p}${n?'（今日'+n+'種目）':''}
+        <small>${ld==='0000'?'未実施':'前回 '+ld.slice(5).replace('-','/')}</small></button>`;}).join('');
+  }else{
+    const used=S.draft.list.map(r=>r.ex);
+    body=libFor(pl,ADD.part).map(x=>{ const dup=used.includes(x[1]);
+      return `<button ${dup?'disabled style="opacity:.35"':`onclick="addEx('${ADD.part}','${x[1]}')"`}>${x[1]}
+        <small>${TYPES[x[2]]}${dup?' ／ 追加済み':''}</small></button>`;}).join('');
+  }
+  return `<div class="sheetbg" onclick="if(event.target===this)closeAdd()"><div class="sheet">
+    <div class="row" style="margin-bottom:10px">${back}
+      <h2 style="font-size:16px">${ADD.part?ADD.part+'の種目を選ぶ':'部位を選ぶ'}</h2>
+      <button class="xbtn" style="margin-left:auto" onclick="closeAdd()">✕</button></div>
+    <div class="exlist">${body}</div></div></div>`;
 }
 function addEx(part,ex){
   S.pick[S.draft.place]=S.pick[S.draft.place]||{}; S.pick[S.draft.place][part]=ex;
-  pushItem(S.draft,part,ex); ADD=null; save(); renderToday();
+  pushItem(S.draft,part,ex); ADD=null; CUR=S.draft.list.length-1; save(); renderToday();
 }
 function removeItem(id){
   const df=S.draft, e=df.e[id];
   if(e&&e.reps.some(x=>x!=null)&&!confirm('この種目の入力を消します。')) return;
-  df.list=df.list.filter(r=>r.id!==id); delete df.e[id]; save(); renderToday();
+  df.list=df.list.filter(r=>r.id!==id); delete df.e[id];
+  if(CUR>=df.list.length) CUR=Math.max(0,df.list.length-1);
+  save(); renderToday();
 }
 const EXSEL=new Set();
 function card(r){
@@ -572,10 +624,7 @@ function card(r){
   const L=S.draft.list, i=L.findIndex(x=>x.id===r.id);
   let h=`<div class="card" id="c_${r.id}" data-id="${r.id}"><div class="row">
     <h2>${r.part}</h2><span class="chip ${p.cls}">${p.why}</span>
-    <span style="margin-left:auto;display:flex;gap:6px">
-      <button class="xbtn" ${i<=0?'disabled style="opacity:.3"':`onclick="move('${r.id}',-1)"`}>◀</button>
-      <button class="xbtn" ${i>=L.length-1?'disabled style="opacity:.3"':`onclick="move('${r.id}',1)"`}>▶</button>
-      <button class="xbtn" onclick="removeItem('${r.id}')">✕</button></span></div>
+    <button class="xbtn" style="margin-left:auto" onclick="removeItem('${r.id}')">✕</button></div>
     <button class="exbtn" onclick="toggleEx('${r.id}')">${r.ex}<span>${EXSEL.has(r.id)?'▴':'▾'}</span></button>`;
   if(EXSEL.has(r.id)){
     const used=L.filter(x=>x.id!==r.id).map(x=>x.ex);
@@ -742,11 +791,30 @@ const SPAGES={
      <input class="full" value="${S.sync.token}" onchange="S.sync.token=this.value.trim();save()">`
     :`<div class="fld" style="margin-top:10px"><label>書き込み先</label></div>
      <div class="full" style="display:flex;align-items:center;font-size:13px;color:${S.sync.calId?'var(--tx)':'var(--mut)'}">${S.sync.calName||'未選択'}</div>
-     <button class="wide" onclick="pickCal()">カレンダーを選ぶ</button>`)
+     `+(CALS?`<div class="exlist" style="margin-top:8px">${CALS.map((c,i)=>
+        `<button onclick="chooseCal(${i})">${c.title||c.internalTitle||'(無題)'}
+          <small>${c.accountName||'アカウント不明'}</small></button>`).join('')}
+        <button onclick="CALS=null;renderSet()">やめる</button></div>`
+      :`<button class="wide" onclick="pickCal()">カレンダーを選ぶ</button>`))
    +`<div class="fld" style="margin-top:10px"><label>開始時刻</label><input type="time" value="${S.start}" onchange="S.start=this.value;save()"></div>
      <div class="fld"><label>所要（分）</label><input type="number" step="15" value="${S.dur}" onchange="S.dur=+this.value;save()"></div>
      <div class="fld"><label>さかのぼる日数</label><input type="number" value="${S.back}" onchange="S.back=Math.max(1,+this.value);save()"></div>
-     <button class="wide pri" onclick="syncCal()">同期する</button>`;}],
+     <button class="wide pri" onclick="syncCal()">同期する</button>`
+   +(sc?`<details class="how" data-k="gs" style="margin-top:12px"><summary>Apps Script の準備手順</summary>
+     <div class="howbox">
+       <ol class="steps">
+         <li>script.google.com を開き「新しいプロジェクト」</li>
+         <li>下のコードを全文コピーして貼り付ける</li>
+         <li>1行目の SECRET を自分で決めた文字列に変える</li>
+         <li>右上「デプロイ」→「新しいデプロイ」→ 種類：ウェブアプリ</li>
+         <li>実行するユーザー：<b>自分</b> ／ アクセスできるユーザー：<b>全員</b></li>
+         <li>承認画面が出たら「詳細」→「安全ではないページに移動」で許可</li>
+         <li>発行された /exec で終わるURLを上の「デプロイURL」に貼る</li>
+         <li>3で決めた文字列を上の「合言葉」に入れる</li>
+       </ol>
+       <textarea id="gscode" readonly>${GS}</textarea>
+       <button class="wide" style="height:42px" onclick="copyGs()">コードをコピー</button>
+     </div></details>`:'');}],
 };
 function renderSet(){
   const el=document.getElementById('v-set');
@@ -776,20 +844,23 @@ function buildEvents(){
   });
   return ev;
 }
+let CALS=null;
 async function pickCal(){
   const P=CC(); if(!P) return alert('端末カレンダー経由はAPK版でのみ使えます。');
   try{
     const g=await P.requestFullCalendarAccess();
-    if(g&&g.result!=='granted') return alert('アクセスが許可されませんでした。');
+    if(g&&g.result!=='granted') return alert('カレンダーへのアクセスが許可されませんでした。端末の設定から許可してください。');
     const r=await P.listCalendars(), all=(r&&(r.result||r.calendars))||r||[];
-    const ws=all.filter(c=>c&&c.id);
-    if(!ws.length) return alert('書き込めるカレンダーがありません。');
-    const n=prompt('番号を入力してください。Googleアカウント名の付いたものを選ぶとGoogleカレンダーに同期されます。\n\n'
-      +ws.map((c,i)=>`${i+1}. ${c.title||c.internalTitle||'(無題)'}${c.accountName?' / '+c.accountName:''}`).join('\n'));
-    const i=parseInt(n,10)-1; if(!(i>=0&&i<ws.length)) return;
-    S.sync.calId=ws[i].id; S.sync.calName=(ws[i].title||ws[i].internalTitle||'')+(ws[i].accountName?' / '+ws[i].accountName:'');
-    save(); renderSet();
-  }catch(e){ alert('取得に失敗しました。\n'+(e&&e.message||e)); }
+    CALS=all.filter(c=>c&&c.id);
+    if(!CALS.length) return alert('書き込めるカレンダーが見つかりません。端末にGoogleアカウントが追加されているか確認してください。');
+    renderSet();
+  }catch(e){ alert('カレンダーの取得に失敗しました。\n'+(e&&e.message||e)); }
+}
+function chooseCal(i){
+  const c=CALS[i]; if(!c) return;
+  S.sync.calId=c.id;
+  S.sync.calName=(c.title||c.internalTitle||'(無題)')+(c.accountName?' / '+c.accountName:'');
+  CALS=null; save(); renderSet();
 }
 async function put(k,title,desc,st,en){
   const P=CC(), id=S.sync.ids[k];
